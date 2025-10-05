@@ -4,21 +4,38 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 import requests
+import shutil
 import subprocess
 import os
+import tempfile
 from dotenv import load_dotenv
 
 # -------------------- LOAD ENV -------------------- #
-load_dotenv()  # Load .env for local use
+load_dotenv()  # Load .env for local development
 
-# Fetch secrets: first try environment, then Streamlit secrets
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or st.secrets.get("telegram_token")
-CHAT_ID = int(os.getenv("CHAT_ID") or st.secrets.get("chat_id", 0))
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or st.secrets.get("github_token")
-GITHUB_REPO = os.getenv("GITHUB_REPO") or st.secrets.get("github_repo")
+# -------------------- SECRET HELPER -------------------- #
+def get_secret(key, default=None):
+    # First try environment variable
+    value = os.getenv(key.upper())
+    if value:
+        return value
+    # Then try Streamlit secrets
+    try:
+        if hasattr(st, "secrets") and st.secrets is not None and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    # Fallback
+    return default
+
+# -------------------- SECRETS -------------------- #
+TELEGRAM_TOKEN = get_secret("telegram_token")
+CHAT_ID = int(get_secret("chat_id", 0))
+GITHUB_TOKEN = get_secret("github_token")
+GITHUB_REPO = get_secret("github_repo")
 
 # -------------------- DATABASE -------------------- #
-DB = "expenses.db"  # relative path; will use existing DB file
+DB = "expenses.db"  # relative path; uses existing DB
 
 # -------------------- TELEGRAM FUNCTION -------------------- #
 def send_telegram_message(message):
@@ -98,17 +115,24 @@ sub_categories_dict = {
     "Misc": []
 }
 
-# -------------------- GITHUB PUSH FUNCTION (Single-folder) -------------------- #
+# -------------------- GITHUB PUSH FUNCTION -------------------- #
 def push_files_to_github():
+    repo_path = "expense-tracker"  # relative path
     files_to_push = ["app.py", "db_setup.py", "expenses.db"]
 
     try:
-        # Ensure DB exists
-        if not os.path.exists(DB):
-            st.error("❌ Database file not found!")
-            return
+        temp_db = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+        shutil.copy2(DB, temp_db.name)
+        shutil.copy2(temp_db.name, os.path.join(repo_path, "expenses.db"))
+        temp_db.close()
+        os.unlink(temp_db.name)
+        st.success("✅ DB copied safely to repo folder")
+    except Exception as e:
+        st.error(f"❌ Failed to copy DB: {e}")
+        return
 
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))  # ensure current folder
+    try:
+        os.chdir(repo_path)
         subprocess.run(["git", "add"] + files_to_push, check=True)
         subprocess.run(["git", "commit", "-m", "Update app & DB"], check=True)
         repo_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
@@ -121,9 +145,16 @@ def push_files_to_github():
 st.sidebar.title("💰 Expense Tracker")
 page = st.sidebar.radio("Go to", ["Summary", "Add Income", "Add Expense", "View Data", "Monthly Comparison", "Yearly Comparison"])
 
-# -------------------- SUMMARY PAGE -------------------- #
+# -------------------- PAGES -------------------- #
+# Keep all your previous logic for Summary, Add Income, Add Expense, View Data,
+# Monthly Comparison, Yearly Comparison unchanged,
+# only make sure DB uses relative path and secrets via get_secret()
+
+
+# -------------------- SUMMARY -------------------- #
 if page == "Summary":
     st.header("📊 Summary Dashboard")
+
     income_df = fetch_df("SELECT * FROM income")
     exp_df = fetch_df("SELECT * FROM expenses")
 
@@ -134,8 +165,8 @@ if page == "Summary":
         income_df['month'] = pd.to_datetime(income_df['month']).dt.to_period('M')
 
     all_months = sorted(list(set(exp_df['month'].astype(str).tolist() + income_df['month'].astype(str).tolist())))
-    selected_month = st.selectbox("Select Month for Summary", ["All Time"] + all_months, index=len(all_months))
 
+    selected_month = st.selectbox("Select Month for Summary", ["All Time"] + all_months, index=len(all_months))
     if selected_month != "All Time":
         income_month = income_df[income_df['month'].astype(str) == selected_month] if not income_df.empty else pd.DataFrame()
         exp_month = exp_df[exp_df['month'].astype(str) == selected_month] if not exp_df.empty else pd.DataFrame()
@@ -179,8 +210,8 @@ if page == "Summary":
         st.bar_chart(top5)
 
 # -------------------- OTHER PAGES -------------------- #
-# Add your Add Income, Add Expense, View Data, Monthly/Yearly Comparison logic here (same as existing code),
-# just ensure DB path is "expenses.db" and secrets are used for Telegram/GitHub.
+# Add your existing Add Income, Add Expense, View Data, Monthly/Yearly Comparison logic here
+# Keep all DB calls relative ("expenses.db") and use unified secret logic
 
 
 
